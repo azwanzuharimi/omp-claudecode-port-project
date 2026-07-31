@@ -36,7 +36,7 @@ The installer snapshots your config with sha256 before touching anything, refuse
 write if it would disturb another tool's hooks, and leaves a verified one-command
 undo. It coexists with existing hook chains rather than replacing them.
 
-**Fast and quiet.** 13.5 ms per hook on bun (28.4 ms on node), against a 150 ms
+**Fast and quiet.** 12.3 ms per hook on bun (25.1 ms on node), against a 150 ms
 budget enforced by the tests. Every hook silent-fails and exits 0 — a crashed hook
 can never block a tool call.
 
@@ -68,15 +68,16 @@ re-run `install.sh` to switch.
 
 ### Performance
 
-93% of a hook's cost is interpreter startup, not our code — the logic itself is
-~1.8 ms. So the runtime choice is the only lever that matters.
+Nearly all of a hook's cost is interpreter startup, not our code — the hook and an
+empty script measure the same within noise. So the runtime is the only lever.
 
 | Runtime | Per hook call | Busy session (387 calls) |
 |---|---|---|
-| node | 28.4 ms | 10.6 s |
-| **bun** | **13.5 ms** | **5.3 s** |
+| node | 25.1 ms | 9.7 s |
+| **bun** | **12.3 ms** | **4.8 s** |
 
-Measured on macOS arm64, 30 runs. A Rust rewrite would reach ~3–4 ms; why that is not
+Measured on macOS arm64, 40 runs. An empty script costs the same on each runtime, so
+this is entirely interpreter startup. A Rust rewrite would reach ~3–4 ms; why that is not
 worth doing is written up in [docs/rust-port.md](docs/rust-port.md).
 
 ## Install
