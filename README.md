@@ -31,14 +31,15 @@ bare `python`, and hardcoded credentials.
 `codemod` routes repeated mechanical edits through `ast-grep` in one pass instead of
 N round trips. `bounded-output` keeps 3,000-line command output out of your context.
 
-**Safe to install and trivial to remove.**
-The installer snapshots your config with sha256 before touching anything, refuses to
-write if it would disturb another tool's hooks, and leaves a verified one-command
-undo. It coexists with existing hook chains rather than replacing them.
+**Safe to install and clean to remove.**
+The installer snapshots your config with sha256 before touching anything and aborts
+rather than disturb another tool's hooks. Uninstall is surgical — it strips only this
+plugin's entries, keeps any rule you edited, and tells you what it deliberately left
+behind. Both are dry-run-first and idempotent.
 
-**Fast and quiet.** 3.3 ms per hook on the Rust engine, 13.8 ms on bun, 29.0 ms on
-node. Every hook silent-fails and exits 0 — a crashed hook can never block a tool
-call.
+**Fast and quiet.** 3.3 ms per hook, from a single static binary with no runtime
+dependency. Every hook silent-fails and exits 0 — a crashed hook can never block a
+tool call.
 
 ---
 
@@ -46,55 +47,59 @@ call.
 
 | | Needed for | Install |
 |---|---|---|
-| `bun` **or** `node` | the hooks | `curl -fsSL https://bun.sh/install \| bash` |
-| `cargo` | **optional** — builds the Rust hooks, [9× faster](#performance) | [rustup.rs](https://rustup.rs) |
+| `cargo` | building the hooks | [rustup.rs](https://rustup.rs) |
 | `jq` | the installer | `brew install jq` / `apt install jq` |
-| `ast-grep` | **optional** — only the `codemod` skill | `brew install ast-grep` |
-| `uv` | **optional** — only the token benchmark | [astral.sh/uv](https://docs.astral.sh/uv/) |
+| `node` | optional — running the test suites | |
+| `ast-grep` | optional — only the `codemod` skill | `brew install ast-grep` |
+| `uv` | optional — only the token benchmark | [astral.sh/uv](https://docs.astral.sh/uv/) |
 
 Claude Code with hook support. macOS or Linux.
 
 ```bash
 # macOS
-brew install jq ast-grep && curl -fsSL https://bun.sh/install | bash
+brew install jq ast-grep && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Debian/Ubuntu
-sudo apt install jq && curl -fsSL https://bun.sh/install | bash
+sudo apt install jq && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-`install.sh` picks the fastest engine available — the Rust binary if built, else bun,
-else node — and bakes absolute paths into the hook commands. Force one with
-`OMP_PORT_ENGINE=js` or `OMP_PORT_RUNTIME=/path/to/runtime`. Re-run `install.sh`
-after installing a faster option to switch.
+The installed hooks are a **single static binary with no runtime dependency** — no
+node, no bun, no interpreter. `cargo` and `jq` are needed once, at install time.
 
 ### Performance
 
 Nearly all of a hook's cost is process startup, not our code — the hook and an empty
-script measure the same within noise. So the engine is the only lever.
+script measure the same within noise. That is why the hooks are compiled.
 
-| Engine | Per hook call | Busy session (387 calls) | |
-|---|---|---|---|
-| **rust** | **3.3 ms** | **1.3 s** | `bash build-rust.sh` |
-| bun | 13.8 ms | 5.3 s | default if installed |
-| node | 29.0 ms | 11.2 s | fallback |
+| | Per hook call | Busy session (387 calls) |
+|---|---|---|
+| **rust (shipped)** | **3.3 ms** | **1.3 s** |
+| node, for reference | 29.0 ms | 11.2 s |
 
-Measured on macOS arm64, 40 runs. The Rust hooks are a straight port — 894 KB binary,
-59 differential cases assert their output is byte-identical to the JS. See
-[docs/rust-port.md](docs/rust-port.md), including the one known divergence. A Rust rewrite would reach ~3–4 ms; why that is not
-worth doing is written up in [docs/rust-port.md](docs/rust-port.md).
+Measured on macOS arm64, 40 runs. 894 KB binary, with 62 differential cases
+asserting its output is byte-identical to the JS reference. See
+[docs/rust-port.md](docs/rust-port.md), including the one known divergence.
+
+**Why not bun?** It was the engine for one commit. `fs.readFileSync(0)` under bun
+allocates catastrophically when fd 0 is a pipe — a 20 MB payload drove RSS to
+**6.5 GB** and OOM-killed the machine, where node peaked at 29 MB and the binary at
+1 MB. Claude Code delivers hook payloads over a pipe, so that is the path that
+matters. One engine, measured and bounded, beats three with different failure modes.
 
 ## Install
 
 ```bash
 git clone https://github.com/azwanzuharimi/omp-claudecode-port-project.git
 cd omp-claudecode-port-project
-bash build-rust.sh    # optional: 9x faster hooks; needs cargo
 bash install.sh
 ```
 
-Then **restart Claude Code** so the hooks load. `build-rust.sh` is optional — without
-it the hooks run on bun or node exactly as before, and `install.sh` says which engine
-it picked.
+Then **restart Claude Code** so the hooks load.
+
+`install.sh` builds the binary for you if it is missing and `cargo` is available
+(~30 s, once). To build and run the full verification first, use
+`bash build-rust.sh` — it compiles, runs 35 unit tests, then proves the binary
+matches the JS reference on 62 payloads.
 
 The installer is self-contained and safe on a machine that has never seen this repo.
 Before touching anything it writes a sha256-verified snapshot of `settings.json`,
@@ -111,34 +116,74 @@ It also:
 - is idempotent — re-running replaces only this plugin's own entries
 - identifies its own entries by hook *script name*, so a future rename cannot orphan them
 
-Hook paths are absolute and computed at install time, so the repo can live anywhere.
+Hook paths are absolute and computed at install time, so the repo can live anywhere —
+but **do not move or delete the clone after installing**, or the hooks will point at
+a path that no longer exists. Move it, then re-run `install.sh`.
+
 `CLAUDE_CONFIG_DIR` is honored if your config is not at `~/.claude`. Nothing
 machine-specific is committed — the same clone works on any box.
+
+### After rebuilding
+
+Re-run `install.sh` after any rebuild or after moving the clone — it re-resolves the
+absolute path baked into the hook commands.
 
 ## Uninstall
 
 ```bash
-bash uninstall.sh            # dry run - shows exactly what would change
+bash uninstall.sh            # dry run - prints exactly what would change
 bash uninstall.sh --apply
 ```
 
-Finds the newest backup, verifies each file's sha256, restores `settings.json`, and
-deletes what the install created (`~/.claude/rules/`, the state dir). It deliberately
-leaves `ast-grep` installed — that is a standalone tool, not ours to remove.
+Then restart Claude Code so it stops loading the hooks.
+
+Removal is **surgical**, not a snapshot rollback. It:
+
+- strips only this plugin's hook entries from `settings.json`, leaving every other
+  key and every other tool's hooks byte-for-byte alone — and aborts without writing
+  if that count would change
+- deletes the rules it installed, but **keeps any rule you edited** and says which
+- deletes `~/.claude/state/omp-claudecode-port-project/`
+- removes `~/.claude/rules/` only if it ends up empty
+
+It is idempotent: running it twice, or on a machine where nothing is installed, is
+safe and prints what it found.
+
+**Left behind on purpose**, with paths printed so you can remove them yourself:
+
+| | Why |
+|---|---|
+| `rust/target/` (~140 MB) | build cache — `rm -rf rust/target` |
+| this clone | delete the directory when you no longer need the tool |
+| `~/.claude/backups/omp-claudecode-port-project-*` | your rollback safety net |
+| `ast-grep` | a standalone tool, not ours to remove |
+
+### Rolling back instead of uninstalling
+
+```bash
+bash uninstall.sh --restore-snapshot            # dry run
+bash uninstall.sh --restore-snapshot --apply
+```
+
+Restores `settings.json` and friends from the newest sha256-verified snapshot. Use
+this to undo a bad install, not for removal — **a snapshot taken during a re-install
+was captured while the plugin was already active**, so restoring it can leave the
+plugin in place. Surgical removal is correct however many times you have installed.
 
 ## Test
 
 ```bash
-node test/run.js         # 44 tests, zero dependencies
-bun  test/run.js         # same suite under the other runtime
-bash build-rust.sh       # builds Rust hooks + 35 unit tests + 59 differential cases
+bash build-rust.sh   # build + 35 Rust unit tests + 62 differential cases
+node test/run.js     # 39 tests against the JS reference implementation
 ```
 
 Runs against an isolated `CLAUDE_CONFIG_DIR`, so it never reads the rules you
 actually have installed. Covers rule matching and scoping, fire-once and `after-gap`,
 the hook JSON contracts, outline quality and the coverage gate, false-positive checks
-on every shipped rule, deterministic rule ordering, byte-identical output across
-node and bun, and the latency budget.
+on every shipped rule, deterministic rule ordering, and the latency budget.
+
+`test/differential.js` is the one that matters: it runs 62 payloads through both the
+binary and the JS reference and asserts the bytes match exactly.
 
 ---
 
@@ -146,24 +191,25 @@ node and bun, and the latency budget.
 
 ```
 .claude-plugin/plugin.json   plugin manifest (hook registrations)
-hooks/
+rust/src/                    THE HOOKS - what actually runs
+  main.rs                    3 subcommands: lazy-rules, lazy-rules-post, read-discipline
+  rules.rs                   rule parsing, scoping, matching (regress = ECMAScript regex)
+  outline.rs                 declaration outlines, 25 extensions / 11 language families
+  state.rs                   per-session state (fire-once, deny-once)
+hooks/                       JS REFERENCE - not installed; the oracle the binary is tested against
   lazy-rules.js              PreToolUse  - Edit|Write|MultiEdit|NotebookEdit|Bash
   lazy-rules-post.js         PostToolUse - delivers soft-mode reminders
   read-discipline.js         PreToolUse  - Read
-  lib/rules.js               rule parsing, scoping, matching
-  lib/outline.js             declaration outlines, 25 extensions / 11 language families
-  lib/state.js               per-session state (fire-once, deny-once)
-  package.json               pins CJS so require() survives type:module ancestors
+  lib/*.js                   the same logic in JS, mirrored by rust/src/
 rules/                       three example rules, copied to ~/.claude/rules on install
 skills/codemod/              ast-grep for repeated mechanical edits
 skills/bounded-output/       keeping large command output out of context
-rust/src/                    the same hooks in Rust (regress = ECMAScript regex)
 bench/read_savings.py        deterministic token measurement, no API calls
-test/differential.js         asserts rust output == js output, byte for byte
+test/differential.js         asserts binary output == JS reference, byte for byte
 docs/rust-port.md            the Rust port: measurements, tradeoffs, known divergence
-build-rust.sh                build + verify the Rust hooks
+build-rust.sh                build + verify
 lib/undo.sh                  generic undo, copied into every backup
-test/run.js                  44 tests
+test/run.js                  39 tests (JS reference)
 install.sh / uninstall.sh
 ```
 

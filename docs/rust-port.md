@@ -1,15 +1,33 @@
 # Porting the hooks to Rust
 
-Status: **done.** `rust/` builds `omp-hooks`, a single binary with three subcommands.
-`install.sh` prefers it when built, falling back to bun then node.
+Status: **done, and now the only engine.** `rust/` builds `omp-hooks`, a single
+binary with three subcommands. `install.sh` installs nothing else.
 
 | | Per hook call | Busy session (387 calls) |
 |---|---|---|
 | **rust** | **3.26 ms** | **1.3 s** |
-| bun | 13.78 ms | 5.3 s |
-| node | 28.99 ms | 11.2 s |
+| node (reference only) | 28.99 ms | 11.2 s |
+| ~~bun~~ | ~~13.78 ms~~ | removed - see below |
 
-894 KB binary, 35 unit tests, and 59 differential cases asserting byte-identical
+## Why bun was removed
+
+bun was the engine for exactly one commit. `fs.readFileSync(0, 'utf8')` under bun
+allocates catastrophically when fd 0 is a **pipe** rather than a regular file:
+
+| Engine | Peak RSS, 20 MB piped payload |
+|---|---|
+| rust | 1 MB |
+| node | 29 MB |
+| **bun 1.3.14** | **6,551 MB** -> OOM |
+
+The same payload delivered by file redirect (`< file`) was fine on all three, which
+is why ordinary testing missed it. Claude Code delivers hook payloads over a pipe.
+
+This was found the hard way, by OOM-killing a developer machine. `test/differential.js`
+now carries 1 MB and 4 MB piped-payload cases so any future regression shows up as a
+test failure rather than a dead laptop.
+
+894 KB binary, 35 unit tests, and 62 differential cases asserting byte-identical
 output against the JS hooks. The analysis that led here is kept below, corrected
 where building it proved the estimates wrong.
 
@@ -29,7 +47,7 @@ JS output here is arguably the broken one, since `\ud83d` alone is not valid tex
 Found by fuzzing 300 files with emoji planted at offsets 155–161; 20 rows diverged,
 all of them this case and nothing else. Reproduced and confirmed independently.
 
-Everything else — all 59 differential cases, and a 14-file corpus spanning every
+Everything else — all 62 differential cases, and a 14-file corpus spanning every
 supported language plus CRLF, BOM, astral characters, and trailing whitespace — is
 byte-identical.
 
@@ -228,17 +246,28 @@ reason, not the milliseconds.
   binary is worth more than the raw speed.
 - **Bun regressing** or proving unstable across versions.
 
-## If it is done anyway
+## How it was actually done
 
-Keep the JS implementation as the reference and the oracle:
+The plan above survived contact, and all three points held:
 
-1. Port `hooks/lib/rules.js` first, on `regress` — it is the only part with tricky
-   semantics (`matcherDigest` per tool, scope globs, fire-once / `after-gap`), and
-   the regex-fidelity risk lives entirely here.
-2. Reuse the existing rule corpus in `test/run.js` as a conformance suite; the Rust
-   binary must produce **byte-identical stdout** for every payload the JS hooks
-   handle. The cross-runtime equivalence test already in the suite is the template —
-   it is what caught a real ordering bug between node and bun.
-3. Keep `install.sh`'s runtime detection and let it prefer a compiled binary when
-   present, falling back to bun then node. That makes the port incremental and
-   reversible rather than a flag day.
+1. **`hooks/lib/rules.js` ported first, on `regress`.** As predicted, that is where
+   the semantic risk lives. Subtleties that needed deliberate handling and would
+   otherwise have diverged silently: a JS `Map` keeps the *original* slot when a key
+   is overwritten, so a project rule shadowing a user rule inherits the user
+   directory's position; `entries.sort()` is UTF-16 order, not UTF-8 byte order;
+   `.trim()` disagrees between the languages on U+FEFF and U+0085; `path.basename`
+   and `path.extname` needed byte-for-byte ports of Node's posix algorithms;
+   `matcher_digest` uses `??` for most tools but truthiness for MultiEdit.
+
+2. **`test/differential.js` is the conformance suite** — 59 payloads through both
+   engines, compared byte for byte, covering every tool type, every regex class that
+   can diverge between engines, malformed input, and shared state files. `outline.rs`
+   was additionally diffed against `outline.js` over a 14-file corpus and 300 fuzzed
+   files.
+
+3. **`install.sh` prefers the binary, falling back to bun then node**, with
+   `OMP_PORT_ENGINE=js` to force JS. The port is reversible, not a flag day.
+
+The JS implementation stays in the repo as the reference and the oracle. It is not
+dead code — it is what the Rust binary is tested against, and it is the fallback on
+any machine without a toolchain.

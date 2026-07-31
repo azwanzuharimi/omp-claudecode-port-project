@@ -24,60 +24,46 @@ command -v jq >/dev/null || {
   exit 1
 }
 
-# Pick the hook engine once, at install time, and bake absolute paths into the
-# hook commands. Essentially all of a hook's cost is startup, so this is the only
-# lever that matters: rust binary ~3ms, bun ~12ms, node ~25ms.
+# The hooks run as the compiled Rust binary. Nothing else.
 #
-# Sets HOOK_ENGINE (rust|bun|node) and a hook_cmd() that builds a command line.
+# The JS implementation in hooks/ is kept as the reference that the binary is
+# tested against (test/differential.js), not as a runtime. It is deliberately not
+# installable: bun's fs.readFileSync(0) allocates catastrophically when fd 0 is a
+# pipe -- a 20 MB payload drove RSS to 6.5 GB on bun 1.3.14 -- and Claude Code
+# delivers hook payloads over a pipe. One engine, measured and bounded, beats
+# three with different failure modes.
 RUST_BIN="$ROOT/rust/target/release/omp-hooks"
 
-pick_js_runtime() {
-  if [ -n "${OMP_PORT_RUNTIME:-}" ]; then
-    command -v "$OMP_PORT_RUNTIME" 2>/dev/null && return 0
-    echo "ERROR: OMP_PORT_RUNTIME='$OMP_PORT_RUNTIME' is not on PATH." >&2
-    exit 1
-  fi
-  command -v bun 2>/dev/null && return 0
-  command -v node 2>/dev/null && return 0
-  return 1
-}
-
-# OMP_PORT_ENGINE=js forces the JS hooks even when the binary is built.
-if [ "${OMP_PORT_ENGINE:-}" != "js" ] && [ -x "$RUST_BIN" ] \
-   && printf '' | "$RUST_BIN" lazy-rules >/dev/null 2>&1; then
-  HOOK_ENGINE="rust"
-  ENGINE_DESC="$RUST_BIN"
-  hook_cmd() { printf '"%s" %s' "$RUST_BIN" "$1"; }
-else
-  RUNTIME="$(pick_js_runtime)" || {
-    echo "ERROR: need 'bun' or 'node' on PATH (or a built Rust binary); found none." >&2
-    echo "  macOS:  brew install oven-sh/bun/bun   (or: brew install node)" >&2
-    echo "  Debian: curl -fsSL https://bun.sh/install | bash" >&2
-    echo "  Rust:   bash build-rust.sh" >&2
-    exit 1
-  }
-  # Refuse a runtime that cannot actually load the hooks, rather than discovering
-  # it later as silently dead hooks.
-  "$RUNTIME" -e "require('$ROOT/hooks/lib/rules.js')" >/dev/null 2>&1 || {
-    echo "ERROR: '$RUNTIME' cannot load the hook modules. Refusing to install." >&2
-    exit 1
-  }
-  HOOK_ENGINE="$(basename "$RUNTIME")"
-  ENGINE_DESC="$RUNTIME"
-  hook_cmd() { printf '"%s" "%s/hooks/%s.js"' "$RUNTIME" "$ROOT" "$1"; }
-
-  if [ "$HOOK_ENGINE" = "node" ] && ! command -v bun >/dev/null; then
-    echo "NOTE: using node (~25ms per hook). bun runs the same code in ~12ms:"
-    echo "        curl -fsSL https://bun.sh/install | bash"
-    echo "      Or build the Rust hooks (~3ms):  bash build-rust.sh"
-    echo "      Then re-run this installer."
+if [ ! -x "$RUST_BIN" ]; then
+  if command -v cargo >/dev/null; then
+    echo "==> hooks binary not built; building it now (one-time, ~30s)"
+    ( cd "$ROOT/rust" && cargo build --release ) || {
+      echo "ERROR: cargo build failed. Fix the build, then re-run this installer." >&2
+      exit 1
+    }
     echo
-  elif [ "$HOOK_ENGINE" = "bun" ] && command -v cargo >/dev/null && [ ! -x "$RUST_BIN" ]; then
-    echo "NOTE: using bun (~12ms per hook). The Rust hooks run in ~3ms:"
-    echo "        bash build-rust.sh && bash install.sh"
-    echo
+  else
+    echo "ERROR: the hooks binary is not built and cargo is not installed." >&2
+    echo >&2
+    echo "  Install Rust:  https://rustup.rs" >&2
+    echo "  Then run:      bash build-rust.sh && bash install.sh" >&2
+    echo >&2
+    echo "  (build-rust.sh also runs the test suite that proves the binary" >&2
+    echo "   behaves identically to the JS reference implementation.)" >&2
+    exit 1
   fi
 fi
+
+# Refuse a binary that cannot actually run, rather than registering a dead hook.
+printf '' | "$RUST_BIN" lazy-rules >/dev/null 2>&1 || {
+  echo "ERROR: $RUST_BIN exists but will not execute." >&2
+  echo "  Rebuild it:  bash build-rust.sh" >&2
+  exit 1
+}
+
+HOOK_ENGINE="rust"
+ENGINE_DESC="$RUST_BIN"
+hook_cmd() { printf '"%s" %s' "$RUST_BIN" "$1"; }
 
 if ! command -v ast-grep >/dev/null; then
   echo "NOTE: ast-grep not found. The hooks work without it; only the 'codemod'"

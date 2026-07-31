@@ -323,6 +323,20 @@ diff('read: directory not a file',       [read(WORK, S(72))]);
 diff('read: wrong tool_name',            [['read-discipline', { session_id: S(73), tool_name: 'Edit', tool_input: { file_path: bigPy } }]]);
 diff('read: missing file_path',          [['read-discipline', { session_id: S(74), tool_name: 'Read', tool_input: {} }]]);
 
+// --- large payloads ----------------------------------------------------------
+// A 20 MB piped payload drove bun's fs.readFileSync(0) to 6.5 GB RSS and an OOM.
+// bun is no longer a supported runtime because of it, but the binary and the node
+// reference must both stay bounded on big input. Claude Code pipes hook payloads,
+// so `input:` here exercises the path that actually matters.
+for (const mb of [1, 4]) {
+  diff(`${mb}MB payload stays bounded and agrees`, [
+    ['lazy-rules', { session_id: S(85 + mb), cwd: WORK, tool_name: 'Bash',
+      tool_input: { command: 'x'.repeat(mb * 1024 * 1024) } }]]);
+}
+diff('large payload that DOES match a rule', [
+  ['lazy-rules', { session_id: S(89), cwd: WORK, tool_name: 'Bash',
+    tool_input: { command: 'x'.repeat(1024 * 1024) + ` ${P} pandas` } }]]);
+
 // --- threshold via env -------------------------------------------------------
 {
   const name = 'read: OMP_PORT_READ_THRESHOLD respected';

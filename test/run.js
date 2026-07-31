@@ -25,23 +25,17 @@ function t(name, fn) {
   catch (e) { fail++; console.log(`  FAIL ${name}\n       ${e.message}`); }
 }
 
-// process.execPath, not a hardcoded 'node', so the suite exercises whichever
-// runtime is running it. Run it twice - `node test/run.js` and `bun test/run.js` -
-// to cover both.
+// These tests exercise the JS reference implementation, which is what the Rust
+// binary is diffed against in test/differential.js. The JS hooks are not a
+// runtime any more - install.sh only ever registers the binary.
 const RUNTIME = process.execPath;
-const RUNTIME_NAME = path.basename(RUNTIME);
 
-function runHookWith(runtime, script, payload, env = {}) {
-  const out = execFileSync(runtime, [path.join(ROOT, 'hooks', script)], {
+function runHook(script, payload, env = {}) {
+  const out = execFileSync(RUNTIME, [path.join(ROOT, 'hooks', script)], {
     input: JSON.stringify(payload),
     env: { ...process.env, ...env },
     encoding: 'utf8',
   });
-  return out;
-}
-
-function runHook(script, payload, env = {}) {
-  const out = runHookWith(RUNTIME, script, payload, env);
   return out.trim() ? JSON.parse(out) : null;
 }
 
@@ -405,60 +399,6 @@ t('KNOWN LIMITATION: a rule pattern inside a search string still fires', () => {
   // Documented in README rather than papered over with a fragile negative lookahead.
   assert.strictEqual(named('Bash', { command: 'grep -r "pip install" docs/' }), 'no-bare-pip');
 });
-
-// ---------------------------------------------------------- cross-runtime
-console.log(`\ncross-runtime equivalence (running under ${RUNTIME_NAME})`);
-
-function whichRuntimes() {
-  const found = [];
-  for (const name of ['node', 'bun']) {
-    try {
-      const p = execFileSync('command', ['-v', name], { encoding: 'utf8', shell: true }).trim();
-      if (p) found.push([name, p]);
-    } catch { /* not installed */ }
-  }
-  return found;
-}
-
-const runtimes = whichRuntimes();
-
-t(`both runtimes present (found: ${runtimes.map((r) => r[0]).join(', ') || 'none'})`, () => {
-  assert.ok(runtimes.length >= 1, 'need at least one JS runtime');
-  if (runtimes.length < 2) {
-    console.log('       (only one runtime installed - equivalence check skipped, not failed)');
-  }
-});
-
-if (runtimes.length === 2) {
-  // Every hook, every branch that produces output, must be byte-identical across
-  // runtimes. This is the entire justification for swapping node out for bun.
-  const cases = [
-    ['lazy-rules.js', 'deny branch',
-      { cwd: path.join(tmp, 'proj'), tool_name: 'Bash', tool_input: { command: 'pip install requests' } }],
-    ['lazy-rules.js', 'no-match branch',
-      { cwd: path.join(tmp, 'proj'), tool_name: 'Bash', tool_input: { command: 'ls -la' } }],
-    ['read-discipline.js', 'outline branch',
-      { tool_name: 'Read', tool_input: { file_path: bigFile } }],
-    ['read-discipline.js', 'under-threshold branch',
-      { tool_name: 'Read', tool_input: { file_path: smallFile } }],
-  ];
-
-  for (const [script, label, basePayload] of cases) {
-    t(`${script} ${label}: node and bun agree byte-for-byte`, () => {
-      const outputs = runtimes.map(([name, bin]) => {
-        // Fresh session id per runtime so fire-once/deny-once state cannot make
-        // the second runtime look different for the wrong reason.
-        const sid = `xrt-${name}-${label.replace(/\W+/g, '')}-${process.pid}`;
-        const out = runHookWith(bin, script, { ...basePayload, session_id: sid });
-        try { fs.unlinkSync(path.join(ISO, 'state', 'omp-claudecode-port-project', sid + '.json')); } catch {}
-        return out;
-      });
-      assert.strictEqual(outputs[0], outputs[1],
-        `${runtimes[0][0]} produced ${JSON.stringify(outputs[0]).slice(0, 120)}\n` +
-        `       ${runtimes[1][0]} produced ${JSON.stringify(outputs[1]).slice(0, 120)}`);
-    });
-  }
-}
 
 // -------------------------------------------------------------- config dir
 console.log('\nconfig resolution');
