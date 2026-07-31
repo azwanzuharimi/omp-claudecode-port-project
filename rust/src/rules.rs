@@ -18,6 +18,8 @@ pub struct ScopeEntry {
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub name: String,
+    /// Parsed for parity with the JS reference; the binary never reads it.
+    #[allow(dead_code)]
     pub description: String,
     /// Raw pattern, taken verbatim from the frontmatter. Compiled lazily in
     /// evaluate() so the cheap scope/arming checks can reject first.

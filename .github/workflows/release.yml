@@ -1,8 +1,11 @@
 name: release
 
 # Builds the Rust hooks for every supported platform and attaches them to a
-# release, so `install.sh` on another machine can download a binary instead of
-# requiring a Rust toolchain.
+# release, so a prebuilt binary is available to download.
+#
+# NOTE: install.sh does NOT fetch these. It builds from source with cargo, or
+# stops and tells you to install Rust. These artifacts exist for anyone who wants
+# a binary without a toolchain; wiring install.sh to download one is not done.
 #
 # Native runners on purpose: cross-compiling to aarch64-apple-darwin from Linux
 # produces a binary Apple Silicon refuses to execute ("Killed: 9"), because it

@@ -22,8 +22,10 @@ SETTINGS="$CONFIG_DIR/settings.json"
 RULES_DIR="$CONFIG_DIR/rules"
 STATE_DIR="$CONFIG_DIR/state/$NAME"
 
-# Same identifier install.sh uses: hook script names, not the plugin/dir name.
-HOOK_MATCH="lazy-rules|read-discipline|omp-hooks"
+# Kept byte-identical to install.sh. Anchored on the binary name plus subcommand,
+# and on the legacy JS script names, so an unrelated tool whose command merely
+# contains "lazy-rules" is never stripped.
+HOOK_MATCH="omp-hooks\" (lazy-rules|lazy-rules-post|read-discipline)|hooks/(lazy-rules|lazy-rules-post|read-discipline)\\.js"
 
 APPLY=0
 MODE="surgical"

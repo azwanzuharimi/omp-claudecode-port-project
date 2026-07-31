@@ -12,9 +12,10 @@ CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CONFIG_DIR/settings.json"
 RULES_DIR="$CONFIG_DIR/rules"
 
-# Hook script basenames identify our entries. Matching on these rather than on
-# the plugin or directory name means a future rename cannot orphan old entries.
-HOOK_MATCH="lazy-rules|read-discipline"
+# Identifies OUR hook entries. Anchored on the binary name plus subcommand, and on
+# the legacy JS script names, so an unrelated tool whose command merely contains the
+# word "lazy-rules" is not stripped. Kept identical to uninstall.sh.
+HOOK_MATCH="omp-hooks\" (lazy-rules|lazy-rules-post|read-discipline)|hooks/(lazy-rules|lazy-rules-post|read-discipline)\\.js"
 
 # ------------------------------------------------------------ prerequisites
 command -v jq >/dev/null || {
@@ -71,7 +72,12 @@ if ! command -v ast-grep >/dev/null; then
   echo
 fi
 
-[ -f "$SETTINGS" ] || { echo "ERROR: no settings.json at $SETTINGS" >&2; exit 1; }
+if [ ! -f "$SETTINGS" ]; then
+  echo "NOTE: no settings.json at $SETTINGS - creating an empty one."
+  mkdir -p "$CONFIG_DIR"
+  printf '{}\n' > "$SETTINGS"
+  echo
+fi
 jq empty "$SETTINGS" 2>/dev/null || { echo "ERROR: $SETTINGS is not valid JSON; refusing to touch it." >&2; exit 1; }
 
 # ------------------------------------------------------------------- backup
@@ -90,22 +96,22 @@ sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1 || sha256sum "$1" | cut -
   echo
 } > "$BK/MANIFEST.txt"
 
+# Manifest paths are ABSOLUTE. They used to be relative to $HOME, which silently
+# produced ~//private/tmp/... targets whenever CLAUDE_CONFIG_DIR lived outside HOME.
+# Each backup carries its own undo.sh, so the two formats never mix.
 for rel in settings.json settings.local.json CLAUDE.md plugins/installed_plugins.json plugins/known_marketplaces.json; do
   src="$CONFIG_DIR/$rel"
-  # Manifest paths are relative to $HOME, which is what undo.sh expects.
-  home_rel="${src#"$HOME"/}"
   if [ -f "$src" ]; then
-    mkdir -p "$BK/files/$(dirname "$home_rel")"
-    cp -p "$src" "$BK/files/$home_rel"
-    printf 'MODIFIED %s %s\n' "$(sha "$src")" "$home_rel" >> "$BK/MANIFEST.txt"
+    mkdir -p "$BK/files$(dirname "$src")"
+    cp -p "$src" "$BK/files$src"
+    printf 'MODIFIED %s %s\n' "$(sha "$src")" "$src" >> "$BK/MANIFEST.txt"
   fi
 done
 
 if [ -d "$RULES_DIR" ]; then
-  rules_rel="${RULES_DIR#"$HOME"/}"
-  mkdir -p "$BK/files/$(dirname "$rules_rel")"
-  cp -R "$RULES_DIR" "$BK/files/$rules_rel"
-  printf 'MODIFIED dir %s\n' "$rules_rel" >> "$BK/MANIFEST.txt"
+  mkdir -p "$BK/files$(dirname "$RULES_DIR")"
+  cp -R "$RULES_DIR" "$BK/files$RULES_DIR"
+  printf 'MODIFIED dir %s\n' "$RULES_DIR" >> "$BK/MANIFEST.txt"
 fi
 
 {
@@ -114,7 +120,7 @@ fi
   echo
 } >> "$BK/MANIFEST.txt"
 for abs in "$RULES_DIR" "$CONFIG_DIR/state/$NAME"; do
-  [ -e "$abs" ] || printf 'CREATED  %s\n' "${abs#"$HOME"/}" >> "$BK/MANIFEST.txt"
+  [ -e "$abs" ] || printf 'CREATED  %s\n' "$abs" >> "$BK/MANIFEST.txt"
 done
 
 cp "$ROOT/lib/undo.sh" "$BK/undo.sh"

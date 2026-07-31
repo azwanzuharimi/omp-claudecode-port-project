@@ -1,8 +1,8 @@
 # omp-claudecode-port-project
 
 Context-efficiency tricks ported from [oh-my-pi](https://omp.sh) (omp) into Claude
-Code, using **only hooks and skills** — no MCP tools, no patched binaries, nothing
-that can break when Claude Code updates.
+Code as **hooks and skills** — no MCP tools, nothing patched inside Claude Code,
+nothing that breaks when it updates. The hooks ship as one small static binary.
 
 The idea worth stealing from omp is not its edit format. It is the discipline of
 controlling *what enters context in the first place*.
@@ -35,7 +35,7 @@ N round trips. `bounded-output` keeps 3,000-line command output out of your cont
 The installer snapshots your config with sha256 before touching anything and aborts
 rather than disturb another tool's hooks. Uninstall is surgical — it strips only this
 plugin's entries, keeps any rule you edited, and tells you what it deliberately left
-behind. Both are dry-run-first and idempotent.
+behind. Uninstall is dry-run-first; both are idempotent.
 
 **Fast and quiet.** 3.3 ms per hook, from a single static binary with no runtime
 dependency. Every hook silent-fails and exits 0 — a crashed hook can never block a
@@ -102,6 +102,7 @@ Then **restart Claude Code** so the hooks load.
 matches the JS reference on 62 payloads.
 
 The installer is self-contained and safe on a machine that has never seen this repo.
+If `settings.json` does not exist yet it creates an empty one.
 Before touching anything it writes a sha256-verified snapshot of `settings.json`,
 `settings.local.json`, `CLAUDE.md`, the two plugin JSONs and any existing `rules/`
 into `~/.claude/backups/omp-claudecode-port-project-<timestamp>/`, with a matching
@@ -140,8 +141,9 @@ Then restart Claude Code so it stops loading the hooks.
 Removal is **surgical**, not a snapshot rollback. It:
 
 - strips only this plugin's hook entries from `settings.json`, leaving every other
-  key and every other tool's hooks byte-for-byte alone — and aborts without writing
-  if that count would change
+  key and every other tool's hooks intact — and aborts without writing if that count
+  would change. (The file is rewritten through `jq`, so whitespace and key order are
+  normalized; content is preserved, exact bytes are not.)
 - deletes the rules it installed, but **keeps any rule you edited** and says which
 - deletes `~/.claude/state/omp-claudecode-port-project/`
 - removes `~/.claude/rules/` only if it ends up empty
@@ -210,7 +212,9 @@ docs/rust-port.md            the Rust port: measurements, tradeoffs, known diver
 build-rust.sh                build + verify
 lib/undo.sh                  generic undo, copied into every backup
 test/run.js                  39 tests (JS reference)
-install.sh / uninstall.sh
+install.sh / uninstall.sh    register / remove (uninstall is dry-run-first)
+rust/Cargo.toml              deps: regress + serde_json, nothing else
+.github/workflows/release.yml  native builds for 4 targets on tag
 ```
 
 ### Lazy rules — the TTSR port
@@ -327,13 +331,20 @@ the harness internals. If you want those, use omp itself.
 
 ## Design notes
 
+- **One engine, on purpose.** The hooks are a compiled binary and nothing else. An
+  earlier version picked between rust, bun and node at install time; bun turned out
+  to allocate 6.5 GB reading a 20 MB pipe and OOM-killed a machine. Three engines
+  means three failure modes to know about.
+- **Regex is `regress`**, an ECMAScript engine, not Rust's `regex` (no lookaround) or
+  `fancy-regex` (Oniguruma semantics would silently change `\d \w \s \b . (?i)` in
+  user-written rules). Rules are user-authored JS regexes; the engine must match.
 - Coexists with other hook chains rather than replacing them — verified against
   `*`-matcher and specific-matcher hooks from other tools: exit 0, no stdout or
   stderr collision.
-- `hooks/package.json` pins CJS so `require()` survives an ancestor `package.json`
-  declaring `type: module`.
 - `CLAUDE_CONFIG_DIR` is honored throughout; nothing hardcodes `~/.claude`.
-- Every hook silent-fails and exits 0. A crashed hook must never block a tool call.
+- Every hook catches panics and exits 0. A crashed hook must never block a tool call.
+- The JS in `hooks/` is the reference implementation, kept because
+  `test/differential.js` needs an oracle. It is never installed.
 - The full hook output surface in Claude Code is four fields: `additionalContext`,
   `permissionDecision`, `permissionDecisionReason`, and `updatedInput` (PreToolUse
   only). There is no tool-*result* rewrite hook, which is why read discipline works
@@ -360,11 +371,12 @@ stream rules"), the structural-outline read, the `matcherDigest` idea of matchin
 only the content a call introduces, and the `<system-interrupt>` envelope format —
 the last reproduced verbatim from omp's TTSR interrupt template.
 
-**What is not:** any source code. Everything here was written from scratch for a
-different runtime — these are Node scripts driving Claude Code hooks; omp is
-TypeScript and Rust, and the two harnesses share no execution model. omp does its
-work by controlling the provider request; this can only deny a tool call or rewrite
-its input.
+**What is not:** any source code. Everything here was written from scratch against a
+different execution model. These are standalone binaries invoked as Claude Code
+hooks — one process per tool call, stdin JSON in, stdout JSON out. omp is a whole
+harness that controls the provider request; a hook can only deny a tool call or
+rewrite its input. Sharing a language (both use Rust, both use `regress`-class
+ECMAScript regex) is convergence on the obvious choice, not shared lineage.
 
 If you want the real thing rather than this partial port, [use omp](https://omp.sh).
 It is a better tool than what a hook layer can reach.

@@ -259,15 +259,17 @@ The plan above survived contact, and all three points held:
    and `path.extname` needed byte-for-byte ports of Node's posix algorithms;
    `matcher_digest` uses `??` for most tools but truthiness for MultiEdit.
 
-2. **`test/differential.js` is the conformance suite** — 59 payloads through both
+2. **`test/differential.js` is the conformance suite** — 62 payloads through both
    engines, compared byte for byte, covering every tool type, every regex class that
-   can diverge between engines, malformed input, and shared state files. `outline.rs`
-   was additionally diffed against `outline.js` over a 14-file corpus and 300 fuzzed
-   files.
+   can diverge between engines, malformed input, piped payloads up to 4 MB, and
+   shared state files. `outline.rs` was additionally diffed against `outline.js` over
+   a 14-file corpus and 300 fuzzed files.
 
-3. **`install.sh` prefers the binary, falling back to bun then node**, with
-   `OMP_PORT_ENGINE=js` to force JS. The port is reversible, not a flag day.
+3. **`install.sh` registers the binary and nothing else.** The plan had it falling
+   back to bun then node; that fallback is gone. bun's `fs.readFileSync(0)` on a pipe
+   allocated 6.5 GB on a 20 MB payload (see above), and carrying three engines meant
+   carrying three failure modes. One engine, measured and bounded, won.
 
 The JS implementation stays in the repo as the reference and the oracle. It is not
-dead code — it is what the Rust binary is tested against, and it is the fallback on
-any machine without a toolchain.
+dead code and it is not a fallback — it is what the Rust binary is tested against,
+and it is the only reason a silent regex divergence would be caught.

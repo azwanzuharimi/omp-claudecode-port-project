@@ -23,29 +23,30 @@ restored=0; deleted=0; skipped=0
 while read -r kind hash path; do
   case "$kind" in
     MODIFIED)
-      [ "$hash" = "dir" ] && { src="$BK/files/$path"; dst="$HOME/$path"
+      # Manifest paths are absolute; the snapshot mirrors them under files/.
+      [ "$hash" = "dir" ] && { src="$BK/files$path"; dst="$path"
         [ -d "$src" ] || continue
-        echo "restore dir  ~/$path"
+        echo "restore dir  $path"
         [ "$APPLY" -eq 1 ] && { rm -rf "$dst"; cp -R "$src" "$dst"; }
         restored=$((restored+1)); continue; }
-      src="$BK/files/$path"; dst="$HOME/$path"
+      src="$BK/files$path"; dst="$path"
       if [ ! -f "$src" ]; then echo "MISSING from snapshot, skipping: $path"; skipped=$((skipped+1)); continue; fi
       actual="$(shasum -a 256 "$src" | cut -d' ' -f1)"
       if [ "$actual" != "$hash" ]; then
         echo "REFUSING $path - snapshot copy is corrupt (sha mismatch)"; skipped=$((skipped+1)); continue
       fi
       if [ -f "$dst" ] && [ "$(shasum -a 256 "$dst" | cut -d' ' -f1)" = "$hash" ]; then
-        echo "unchanged    ~/$path"; continue
+        echo "unchanged    $path"; continue
       fi
-      echo "restore      ~/$path"
+      echo "restore      $path"
       [ "$APPLY" -eq 1 ] && cp -p "$src" "$dst"
       restored=$((restored+1))
       ;;
     CREATED)
       # For CREATED rows the manifest has only two fields, so $hash holds the path.
-      p="$hash"; dst="$HOME/$p"
+      p="$hash"; dst="$p"
       [ -e "$dst" ] || continue
-      echo "delete       ~/$p"
+      echo "delete       $p"
       [ "$APPLY" -eq 1 ] && rm -rf "$dst"
       deleted=$((deleted+1))
       ;;

@@ -1,41 +1,6 @@
 {
   "name": "omp-claudecode-port-project",
-  "version": "0.1.0",
-  "description": "Context-efficiency tricks ported from oh-my-pi: rules that stay dormant until you go off-script, and reads that return signatures instead of whole files.",
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/lazy-rules.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/read-discipline.js\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/lazy-rules-post.js\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
+  "version": "0.2.0",
+  "description": "Context-efficiency tricks ported from oh-my-pi: rules that stay dormant until you go off-script, and reads that return signatures instead of whole files. Hooks are installed by install.sh; this manifest provides the skills.",
+  "//": "No hooks block on purpose. The hooks are a compiled binary that has to be built first, so they cannot be registered by a manifest that ships source only - a manifest-registered hook would point at a binary that may not exist. Run install.sh, which builds it and registers absolute paths. An earlier version of this file registered the JS hooks under node; that shipped the exact interpreter this project removed."
 }
