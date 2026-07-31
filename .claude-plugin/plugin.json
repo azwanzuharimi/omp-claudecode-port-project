@@ -1,0 +1,41 @@
+{
+  "name": "omp-lite",
+  "version": "0.1.0",
+  "description": "Context-efficiency tricks ported from oh-my-pi: rules that stay dormant until you go off-script, and reads that return signatures instead of whole files.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/lazy-rules.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/read-discipline.js\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/lazy-rules-post.js\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

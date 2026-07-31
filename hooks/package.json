@@ -1,0 +1,4 @@
+{
+  "type": "commonjs",
+  "//": "Pins this directory to CJS so require() resolves even when an ancestor package.json (e.g. ~/.claude/package.json from another plugin) declares type:module. Same fix as caveman's src/hooks/package.json."
+}
