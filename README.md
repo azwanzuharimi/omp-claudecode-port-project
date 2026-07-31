@@ -1,43 +1,143 @@
 # omp-claudecode-port-project
 
-Context-efficiency tricks ported from [oh-my-pi](https://omp.sh) into Claude Code,
-using only hooks and skills — no MCP tools, no patched binaries.
+Context-efficiency tricks ported from [oh-my-pi](https://omp.sh) (omp) into Claude
+Code, using **only hooks and skills** — no MCP tools, no patched binaries, nothing
+that can break when Claude Code updates.
 
-## What this is not
+The idea worth stealing from omp is not its edit format. It is the discipline of
+controlling *what enters context in the first place*.
 
-**It is not a hashline port.** oh-my-pi's headline feature replaces the edit tool
-with content-hash anchors. Claude Code's `Edit` is compiled into a 257 MB binary and
-cannot be replaced. That part does not travel.
+---
 
-**The famous numbers do not transfer either.** The widely-quoted "−61% output tokens"
-is Grok 4 Fast, and the mechanism is *retry-loop elimination* — weak models failing
-at `str_replace` whitespace matching. Claude models were already good at that.
-Measured in the same benchmark: Sonnet 4.5 −24%, Haiku 4.5 −22%, and **no Opus
-measurement exists at all** — the "~30% on Opus" figure in several guides is not in
-the source data. Two models got *worse* (GPT-5.2 Codex +26%, DeepSeek V3.2 +20%).
+## What you get
 
-What *does* travel is the part nobody quotes: controlling what enters context.
+**Reads that return a map instead of the whole file.**
+Ask to read a 1,500-line file and you get a declaration outline with line numbers,
+not 19,000 tokens of source. You then read only the ranges you need.
+**94% fewer tokens** on intercepted reads ([measured](#measured), not estimated).
 
-## Components
+**Rules that cost nothing until you break them.**
+Every line in `CLAUDE.md` is billed on *every single request*, forever. A rule like
+"use `uv`, never bare `pip`" only matters at the moment you reach for `pip` — so it
+should cost nothing until then. These rules sit dormant and fire only on the tool
+call that violates them.
 
-| | Mechanism | Status |
+**Guardrails that catch mistakes before they happen, not after.**
+A rule denies the bad call *before* it runs and hands back an explanation, so you
+skip the whole write-it-wrong → notice → fix-it cycle. Ships with three: bare `pip`,
+bare `python`, and hardcoded credentials.
+
+**Two skills for the expensive habits.**
+`codemod` routes repeated mechanical edits through `ast-grep` in one pass instead of
+N round trips. `bounded-output` keeps 3,000-line command output out of your context.
+
+**Safe to install and trivial to remove.**
+The installer snapshots your config with sha256 before touching anything, refuses to
+write if it would disturb another tool's hooks, and leaves a verified one-command
+undo. It coexists with existing hook chains rather than replacing them.
+
+**Fast and quiet.** ~25 ms per hook, against a 150 ms budget enforced by the tests.
+Every hook silent-fails and exits 0 — a crashed hook can never block a tool call.
+
+---
+
+## Requirements
+
+| | Needed for | Install |
 |---|---|---|
-| **Lazy rules** | Regex rules over new content; fire only when you go off-script | Working, unmeasured |
-| **Read discipline** | Long unbounded reads get an outline instead of the file | Working, **94% measured** |
-| **codemod** skill | `ast-grep` for repeated mechanical edits | Skill only |
-| **bounded-output** skill | Keep large command output out of context | Skill only |
+| `node` | the hooks | `brew install node` / `apt install nodejs` |
+| `jq` | the installer | `brew install jq` / `apt install jq` |
+| `ast-grep` | **optional** — only the `codemod` skill | `brew install ast-grep` |
+| `uv` | **optional** — only the benchmark | [astral.sh/uv](https://docs.astral.sh/uv/) |
+
+Claude Code with hook support. macOS or Linux.
+
+```bash
+brew install jq node ast-grep                        # macOS
+sudo apt install jq nodejs && brew install ast-grep  # Debian/Ubuntu
+```
+
+## Install
+
+```bash
+git clone https://github.com/azwanzuharimi/omp-claudecode-port-project.git
+cd omp-claudecode-port-project
+bash install.sh
+```
+
+Then **restart Claude Code** so the hooks load.
+
+The installer is self-contained and safe on a machine that has never seen this repo.
+Before touching anything it writes a sha256-verified snapshot of `settings.json`,
+`settings.local.json`, `CLAUDE.md`, the two plugin JSONs and any existing `rules/`
+into `~/.claude/backups/omp-claudecode-port-project-<timestamp>/`, with a matching
+`undo.sh` beside it.
+
+It also:
+
+- refuses to run if `settings.json` is not valid JSON
+- counts every pre-existing hook across every event before and after, and **aborts
+  without writing** if that number would change — other tools' hooks cannot be clobbered
+- never overwrites a rule file you have edited
+- is idempotent — re-running replaces only this plugin's own entries
+- identifies its own entries by hook *script name*, so a future rename cannot orphan them
+
+Hook paths are absolute and computed at install time, so the repo can live anywhere.
+`CLAUDE_CONFIG_DIR` is honored if your config is not at `~/.claude`. Nothing
+machine-specific is committed — the same clone works on any box.
+
+## Uninstall
+
+```bash
+bash uninstall.sh            # dry run - shows exactly what would change
+bash uninstall.sh --apply
+```
+
+Finds the newest backup, verifies each file's sha256, restores `settings.json`, and
+deletes what the install created (`~/.claude/rules/`, the state dir). It deliberately
+leaves `ast-grep` installed — that is a standalone tool, not ours to remove.
+
+## Test
+
+```bash
+node test/run.js    # 38 tests, zero dependencies
+```
+
+Runs against an isolated `CLAUDE_CONFIG_DIR`, so it never reads the rules you
+actually have installed. Covers rule matching and scoping, fire-once and `after-gap`,
+the hook JSON contracts, outline quality and the coverage gate, false-positive checks
+on every shipped rule, and the latency budget.
+
+---
+
+## What's inside
+
+```
+.claude-plugin/plugin.json   plugin manifest (hook registrations)
+hooks/
+  lazy-rules.js              PreToolUse  - Edit|Write|MultiEdit|NotebookEdit|Bash
+  lazy-rules-post.js         PostToolUse - delivers soft-mode reminders
+  read-discipline.js         PreToolUse  - Read
+  lib/rules.js               rule parsing, scoping, matching
+  lib/outline.js             declaration outlines, 25 extensions / 11 language families
+  lib/state.js               per-session state (fire-once, deny-once)
+  package.json               pins CJS so require() survives type:module ancestors
+rules/                       three example rules, copied to ~/.claude/rules on install
+skills/codemod/              ast-grep for repeated mechanical edits
+skills/bounded-output/       keeping large command output out of context
+bench/read_savings.py        deterministic token measurement, no API calls
+lib/undo.sh                  generic undo, copied into every backup
+test/run.js                  38 tests
+install.sh / uninstall.sh
+```
 
 ### Lazy rules — the TTSR port
 
-oh-my-pi's argument: *"Your rules sit dormant until the model goes off-script. You
-get course-correction without paying context tax on every turn."*
+omp's argument: *"Your rules sit dormant until the model goes off-script. You get
+course-correction without paying context tax on every turn."*
 
-An always-on `CLAUDE.md` rule is billed on **every request**. A rule that only
-matters when you're about to do one specific wrong thing costs nothing until it
-fires.
-
-Rules live in `~/.claude/rules/*.md` (user) and `<repo>/.claude/rules/*.md`
-(project — shadows user by filename).
+Rules live in `~/.claude/rules/*.md` (user) and `<repo>/.claude/rules/*.md` (project,
+which shadows user rules by filename).
 
 ```markdown
 ---
@@ -54,41 +154,45 @@ This machine uses UV. Use `uv add <pkg>` instead.
 |---|---|
 | `condition` | JS regex, **taken verbatim** — write `\w`, not `\\w` |
 | `flags` | optional regex flags, e.g. `"i"` |
-| `scope` | `tool:NAME` or `tool:NAME(glob)`, comma-separated. Omit to match all tools |
+| `scope` | `tool:NAME` or `tool:NAME(glob)`, comma-separated. Omit to match every tool |
 | `repeat` | `once` (default) or `after-gap N` tool calls |
 | `interrupt` | `true` denies the call; `false` attaches a reminder to the result instead |
 
 The regex matches **only the new content** — `new_string` for `Edit`, `content` for
 `Write`, `command` for `Bash`. Never the existing file. Matching pre-existing content
-means every unrelated edit to a file that happens to contain the pattern fires the
-rule.
+would fire on every unrelated edit to a file that happens to contain the pattern.
 
-Ships three rules: `no-bare-pip`, `no-bare-python`, `no-hardcoded-secrets`.
+`interrupt: false` is the cheap variant: it lets the call run and attaches the
+reminder to the result, costing no extra round trip.
+
+**Shipped rules:** `no-bare-pip`, `no-bare-python`, `no-hardcoded-secrets`.
 
 **Known limitation:** a regex cannot tell `pip install x` from
-`grep -r "pip install" docs/`. Both fire. `repeat: once` keeps the cost to a single
+`grep -r "pip install" docs/`. Both fire. `repeat: once` caps the cost at a single
 denial per session. This is asserted in the test suite rather than papered over with
 a fragile lookahead.
 
 ### Read discipline
 
-oh-my-pi's `read` returns declarations with bodies elided. Claude Code cannot rewrite
-a tool result — but `permissionDecisionReason` *is* delivered to the model. So the
-hook builds the outline itself and returns it as the denial reason. The model gets
-the outline for the price of one denied call, then re-reads only what it needs.
+omp's `read` returns declarations with bodies elided. Claude Code cannot rewrite a
+tool result — but `permissionDecisionReason` *is* delivered to the model. So the hook
+builds the outline itself and returns it as the denial reason. The model gets the
+outline for the price of one denied call, then re-reads only what it needs.
 
-Fires only when **all** of these hold:
+It fires only when **all** of these hold:
 
-- recognized source extension
+- recognized source extension (25 extensions across 11 language families)
 - no `offset`/`limit` already set
 - over 400 lines (`OMP_PORT_READ_THRESHOLD` to change)
 - the outline actually represents the file — at least `max(4, lines/80)` declarations
 - this path has not already been denied in this session
 
-The last two matter. A sparse outline over a long file teaches nothing, so the model
-re-reads anyway and the denial cost a round trip for free. And a path is denied at
-most **once** per session — a second request means the model genuinely wants the
-file, and a denial loop would wedge the session.
+The last two are what keep it from being annoying. A sparse outline over a long file
+teaches nothing, so the model would re-read anyway and the denial cost a round trip
+for free. And a path is denied at most **once** per session — a second request means
+the model genuinely wants the file, and a denial loop would wedge the session.
+
+---
 
 ## Measured
 
@@ -112,77 +216,47 @@ Claude's — ratios are meaningful, absolute counts are close but not exact.
 
 **Read this honestly.** The 94% is the saving *if* the model would otherwise have
 read the whole file, and it does not subtract the follow-up ranged re-read that
-usually follows. It also only applies to the few files that clear the 400-line gate —
-5 files in a mid-size repo, not every read.
+usually follows. It applies only to files that clear the 400-line gate — 5 files in a
+mid-size repo, not every read.
 
 **The lazy-rules saving is not measured.** Its value is avoided bad-edit-then-fix
 cycles, which needs paired end-to-end runs to quantify. Treat it as unproven.
 
-## Install (including on a second machine)
+## What this deliberately is not
 
-```bash
-git clone https://github.com/azwanzuharimi/omp-claudecode-port-project.git
-cd omp-claudecode-port-project
-bash install.sh
-```
+**Not a hashline port.** omp's headline feature replaces the edit tool with
+content-hash anchors. Claude Code's `Edit` is compiled into a ~257 MB binary and
+cannot be replaced. That part does not travel.
 
-Then restart Claude Code.
+Worth knowing if you came here from the blog posts: the widely-described "2-char
+per-line hash" format is omp v1 and superseded. Shipping v2 is a single 4-hex
+whole-file tag plus plain line numbers.
 
-**Requirements:** `jq` and `node` (hard). `ast-grep` is optional — only the
-`codemod` skill uses it; the hooks work without it and the installer just prints a
-note.
+**The famous numbers do not transfer either.** The quoted "−61% output tokens" is
+Grok 4 Fast, and the mechanism is *retry-loop elimination* — weak models failing at
+`str_replace` whitespace matching. Claude models were already good at that. From the
+same benchmark: Sonnet 4.5 −24%, Haiku 4.5 −22%, and **no Opus measurement exists** —
+the "~30% on Opus" figure repeated in several guides is not in the source data. Two
+models got *worse* (GPT-5.2 Codex +26%, DeepSeek V3.2 +20%).
 
-```bash
-brew install jq node ast-grep          # macOS
-sudo apt install jq nodejs && brew install ast-grep   # Debian/Ubuntu
-```
+**Also not portable:** snapcompact (rendering context to PNG bitmaps), tool-result
+pruning, and `xd://` lazy tool schemas all need control over the provider request or
+the harness internals. If you want those, use omp itself.
 
-The installer is self-contained and safe to run on a machine that has never seen
-this repo. Before touching anything it writes a sha256-verified snapshot of
-`settings.json`, `settings.local.json`, `CLAUDE.md`, the two plugin JSONs and your
-existing `rules/` to `~/.claude/backups/omp-claudecode-port-project-<timestamp>/`,
-and drops a matching `undo.sh` beside it.
+## Design notes
 
-It also:
-
-- refuses to run if `settings.json` is not valid JSON
-- counts every pre-existing hook across every event before and after, and **aborts
-  without writing** if the number would change — your other hooks cannot be clobbered
-- never overwrites a rule file you already edited
-- is idempotent: re-running replaces only this plugin's own hook entries
-
-Hook paths are absolute and computed at install time, so the repo can live anywhere.
-`CLAUDE_CONFIG_DIR` is honored if your config is not at `~/.claude`.
-
-Nothing here is machine-specific — no absolute paths, secrets, or host state are
-committed. The same clone works on any macOS or Linux box.
-
-## Uninstall
-
-```bash
-bash uninstall.sh            # dry run against the newest backup
-bash uninstall.sh --apply
-```
-
-Restores `settings.json` from the snapshot and removes what the install created.
-It deliberately leaves `ast-grep` installed.
-
-## Test
-
-```bash
-node test/run.js    # 38 tests, no dependencies
-```
-
-Runs against an isolated `CLAUDE_CONFIG_DIR` so it never reads the rules you actually
-have installed. Covers rule matching and scoping, fire-once and `after-gap`, hook
-JSON contracts, outline quality and the coverage gate, false-positive checks on every
-shipped rule, and a 150 ms latency budget per hook (currently ~25 ms).
-
-## Notes for this machine
-
-- Hooks coexist with the existing Orca (`*`) and moshi (specific-matcher) chains —
-  verified: exit 0, no stdout, no stderr collision.
+- Coexists with other hook chains rather than replacing them — verified against
+  `*`-matcher and specific-matcher hooks from other tools: exit 0, no stdout or
+  stderr collision.
 - `hooks/package.json` pins CJS so `require()` survives an ancestor `package.json`
-  declaring `type: module`. Same fix caveman needed.
+  declaring `type: module`.
 - `CLAUDE_CONFIG_DIR` is honored throughout; nothing hardcodes `~/.claude`.
 - Every hook silent-fails and exits 0. A crashed hook must never block a tool call.
+- The full hook output surface in Claude Code is four fields: `additionalContext`,
+  `permissionDecision`, `permissionDecisionReason`, and `updatedInput` (PreToolUse
+  only). There is no tool-*result* rewrite hook, which is why read discipline works
+  by denying with an outline rather than by shrinking the result.
+
+## License
+
+MIT
