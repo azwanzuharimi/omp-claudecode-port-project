@@ -1,7 +1,53 @@
-# Porting the hooks to Rust — analysis
+# Porting the hooks to Rust
 
-Status: **not done, and not currently recommended.** This records the measurements
-and blockers so the decision can be revisited with data instead of re-litigated.
+Status: **done.** `rust/` builds `omp-hooks`, a single binary with three subcommands.
+`install.sh` prefers it when built, falling back to bun then node.
+
+| | Per hook call | Busy session (387 calls) |
+|---|---|---|
+| **rust** | **3.26 ms** | **1.3 s** |
+| bun | 13.78 ms | 5.3 s |
+| node | 28.99 ms | 11.2 s |
+
+894 KB binary, 35 unit tests, and 59 differential cases asserting byte-identical
+output against the JS hooks. The analysis that led here is kept below, corrected
+where building it proved the estimates wrong.
+
+## Known divergence: one, and it is unfixable
+
+Outline rows are truncated at 160 UTF-16 units, matching JS `.slice(0, 160)`. If an
+astral character (emoji, rare CJK) **straddles that exact boundary** on a declaration
+line, JS keeps a lone high surrogate and Rust drops the character:
+
+```
+js  : ...xxxxx\ud83d      (a lone surrogate, escaped by JSON.stringify)
+rust: ...xxxxx            (character dropped)
+```
+
+Rust `String` cannot hold a lone surrogate, so there is no faithful option — and the
+JS output here is arguably the broken one, since `\ud83d` alone is not valid text.
+Found by fuzzing 300 files with emoji planted at offsets 155–161; 20 rows diverged,
+all of them this case and nothing else. Reproduced and confirmed independently.
+
+Everything else — all 59 differential cases, and a 14-file corpus spanning every
+supported language plus CRLF, BOM, astral characters, and trailing whitespace — is
+byte-identical.
+
+## Cost that did not show up in the estimates
+
+`outline()` scan time is roughly **26 µs/KB**, because ~30 anchored backtracking
+patterns run per line. Files above ~80 KB therefore blow the 2.5 ms budget on scan
+alone; `read-discipline`'s 4 MB ceiling means a worst-case call is far slower than
+the startup figure suggests. The JS has the same shape of cost, so this is not a
+regression — but if it matters, the fix is a size cutoff before `outline()` runs,
+not a change to the engine.
+
+---
+
+## Original analysis
+
+This recorded the measurements and blockers before the port was done. Kept because
+the reasoning about regex engines is what made the port safe.
 
 ## The question
 
@@ -50,8 +96,9 @@ Per session, using hook-invocation counts from real transcripts:
 | busiest | 387 | 9.7 s | 4.8 s | ~1.1 s |
 | typical | 260 | 6.5 s | 3.2 s | ~0.7 s |
 
-**node → bun saves ~5 s** on a busy session, for a runtime-detection change.
-**bun → Rust would save ~3.7 s more**, for a full rewrite. Real, but expensive.
+**node → bun saves ~5 s** on a busy session; **bun → Rust saves ~4 s more.**
+Both were done. The measured Rust figure (3.26 ms) landed within 0.7 ms of the
+estimate projected from `rg` and `ast-grep`.
 
 ## The regex problem — and its solution
 
@@ -161,11 +208,11 @@ condition at load. In Rust that would dominate the runtime. The fix is structura
 `serde` derive costs compile time, not startup. Avoid `once_cell` blocks that build
 `RegexSet`s eagerly. Skip UPX — decompression on every start defeats the purpose.
 
-## What it actually buys
+## What it actually bought
 
-Latency is the weaker argument: ~9.5 ms/hook over bun, ~3.7 s on a busy session.
+Latency: 10.5 ms/hook over bun, ~4 s on a busy session.
 
-The stronger one is **dropping runtime dependencies entirely.** A Rust binary needs
+The bigger win is **dropping runtime dependencies.** A Rust binary needs
 no `bun`, no `node` — and could do the `settings.json` editing itself, removing the
 `jq` requirement too. `git clone && ./install` with zero prerequisites is a genuinely
 better story than the current three. If this port ever happens, that should be the

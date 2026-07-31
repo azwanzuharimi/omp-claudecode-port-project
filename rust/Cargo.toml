@@ -1,0 +1,28 @@
+[package]
+name = "omp-hooks"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Claude Code hooks for omp-claudecode-port-project: lazy rules and read discipline"
+license = "MIT"
+
+[[bin]]
+name = "omp-hooks"
+path = "src/main.rs"
+
+[dependencies]
+# ECMAScript-semantics regex engine (the regex backend of the Boa JS engine).
+# Chosen over `regex` (no lookaround) and `fancy-regex` (Oniguruma semantics
+# would silently change \d \w \s \b . and (?i) in user-authored rules).
+regress = "0.11"
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+# Deliberately NOT panic="abort": main wraps everything in catch_unwind so a bug
+# exits 0 with no output rather than aborting. A hook must never block a tool call,
+# which is the same guarantee the JS hooks get from their try/catch.
+panic = "unwind"
+strip = "symbols"

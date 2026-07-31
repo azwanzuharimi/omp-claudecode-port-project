@@ -36,9 +36,9 @@ The installer snapshots your config with sha256 before touching anything, refuse
 write if it would disturb another tool's hooks, and leaves a verified one-command
 undo. It coexists with existing hook chains rather than replacing them.
 
-**Fast and quiet.** 12.3 ms per hook on bun (25.1 ms on node), against a 150 ms
-budget enforced by the tests. Every hook silent-fails and exits 0 — a crashed hook
-can never block a tool call.
+**Fast and quiet.** 3.3 ms per hook on the Rust engine, 13.8 ms on bun, 29.0 ms on
+node. Every hook silent-fails and exits 0 — a crashed hook can never block a tool
+call.
 
 ---
 
@@ -46,7 +46,8 @@ can never block a tool call.
 
 | | Needed for | Install |
 |---|---|---|
-| `bun` **or** `node` | the hooks — bun preferred, [2× faster](#performance) | `curl -fsSL https://bun.sh/install \| bash` |
+| `bun` **or** `node` | the hooks | `curl -fsSL https://bun.sh/install \| bash` |
+| `cargo` | **optional** — builds the Rust hooks, [9× faster](#performance) | [rustup.rs](https://rustup.rs) |
 | `jq` | the installer | `brew install jq` / `apt install jq` |
 | `ast-grep` | **optional** — only the `codemod` skill | `brew install ast-grep` |
 | `uv` | **optional** — only the token benchmark | [astral.sh/uv](https://docs.astral.sh/uv/) |
@@ -61,23 +62,25 @@ brew install jq ast-grep && curl -fsSL https://bun.sh/install | bash
 sudo apt install jq && curl -fsSL https://bun.sh/install | bash
 ```
 
-Either runtime works. `install.sh` picks bun if it is on PATH, otherwise node, and
-bakes the resolved absolute path into the hook commands. Override with
-`OMP_PORT_RUNTIME=/path/to/runtime bash install.sh`. If you install bun later,
-re-run `install.sh` to switch.
+`install.sh` picks the fastest engine available — the Rust binary if built, else bun,
+else node — and bakes absolute paths into the hook commands. Force one with
+`OMP_PORT_ENGINE=js` or `OMP_PORT_RUNTIME=/path/to/runtime`. Re-run `install.sh`
+after installing a faster option to switch.
 
 ### Performance
 
-Nearly all of a hook's cost is interpreter startup, not our code — the hook and an
-empty script measure the same within noise. So the runtime is the only lever.
+Nearly all of a hook's cost is process startup, not our code — the hook and an empty
+script measure the same within noise. So the engine is the only lever.
 
-| Runtime | Per hook call | Busy session (387 calls) |
-|---|---|---|
-| node | 25.1 ms | 9.7 s |
-| **bun** | **12.3 ms** | **4.8 s** |
+| Engine | Per hook call | Busy session (387 calls) | |
+|---|---|---|---|
+| **rust** | **3.3 ms** | **1.3 s** | `bash build-rust.sh` |
+| bun | 13.8 ms | 5.3 s | default if installed |
+| node | 29.0 ms | 11.2 s | fallback |
 
-Measured on macOS arm64, 40 runs. An empty script costs the same on each runtime, so
-this is entirely interpreter startup. A Rust rewrite would reach ~3–4 ms; why that is not
+Measured on macOS arm64, 40 runs. The Rust hooks are a straight port — 894 KB binary,
+59 differential cases assert their output is byte-identical to the JS. See
+[docs/rust-port.md](docs/rust-port.md), including the one known divergence. A Rust rewrite would reach ~3–4 ms; why that is not
 worth doing is written up in [docs/rust-port.md](docs/rust-port.md).
 
 ## Install
@@ -85,10 +88,13 @@ worth doing is written up in [docs/rust-port.md](docs/rust-port.md).
 ```bash
 git clone https://github.com/azwanzuharimi/omp-claudecode-port-project.git
 cd omp-claudecode-port-project
+bash build-rust.sh    # optional: 9x faster hooks; needs cargo
 bash install.sh
 ```
 
-Then **restart Claude Code** so the hooks load.
+Then **restart Claude Code** so the hooks load. `build-rust.sh` is optional — without
+it the hooks run on bun or node exactly as before, and `install.sh` says which engine
+it picked.
 
 The installer is self-contained and safe on a machine that has never seen this repo.
 Before touching anything it writes a sha256-verified snapshot of `settings.json`,
@@ -123,8 +129,9 @@ leaves `ast-grep` installed — that is a standalone tool, not ours to remove.
 ## Test
 
 ```bash
-node test/run.js    # 44 tests, zero dependencies
-bun  test/run.js    # same suite under the other runtime
+node test/run.js         # 44 tests, zero dependencies
+bun  test/run.js         # same suite under the other runtime
+bash build-rust.sh       # builds Rust hooks + 35 unit tests + 59 differential cases
 ```
 
 Runs against an isolated `CLAUDE_CONFIG_DIR`, so it never reads the rules you
@@ -150,8 +157,11 @@ hooks/
 rules/                       three example rules, copied to ~/.claude/rules on install
 skills/codemod/              ast-grep for repeated mechanical edits
 skills/bounded-output/       keeping large command output out of context
+rust/src/                    the same hooks in Rust (regress = ECMAScript regex)
 bench/read_savings.py        deterministic token measurement, no API calls
-docs/rust-port.md            why the hooks are not Rust (with measurements)
+test/differential.js         asserts rust output == js output, byte for byte
+docs/rust-port.md            the Rust port: measurements, tradeoffs, known divergence
+build-rust.sh                build + verify the Rust hooks
 lib/undo.sh                  generic undo, copied into every backup
 test/run.js                  44 tests
 install.sh / uninstall.sh

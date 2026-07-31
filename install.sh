@@ -24,10 +24,14 @@ command -v jq >/dev/null || {
   exit 1
 }
 
-# Resolve the JS runtime once, at install time, and bake its absolute path into
-# the hook commands. ~93% of a hook's cost is interpreter startup: node is ~25ms,
-# bun runs the identical CommonJS in ~4ms. Bun is preferred purely for that.
-pick_runtime() {
+# Pick the hook engine once, at install time, and bake absolute paths into the
+# hook commands. Essentially all of a hook's cost is startup, so this is the only
+# lever that matters: rust binary ~3ms, bun ~12ms, node ~25ms.
+#
+# Sets HOOK_ENGINE (rust|bun|node) and a hook_cmd() that builds a command line.
+RUST_BIN="$ROOT/rust/target/release/omp-hooks"
+
+pick_js_runtime() {
   if [ -n "${OMP_PORT_RUNTIME:-}" ]; then
     command -v "$OMP_PORT_RUNTIME" 2>/dev/null && return 0
     echo "ERROR: OMP_PORT_RUNTIME='$OMP_PORT_RUNTIME' is not on PATH." >&2
@@ -38,26 +42,41 @@ pick_runtime() {
   return 1
 }
 
-RUNTIME="$(pick_runtime)" || {
-  echo "ERROR: need either 'bun' or 'node' on PATH; found neither." >&2
-  echo "  macOS:  brew install oven-sh/bun/bun   (or: brew install node)" >&2
-  echo "  Debian: curl -fsSL https://bun.sh/install | bash" >&2
-  exit 1
-}
-RUNTIME_NAME="$(basename "$RUNTIME")"
+# OMP_PORT_ENGINE=js forces the JS hooks even when the binary is built.
+if [ "${OMP_PORT_ENGINE:-}" != "js" ] && [ -x "$RUST_BIN" ] \
+   && printf '' | "$RUST_BIN" lazy-rules >/dev/null 2>&1; then
+  HOOK_ENGINE="rust"
+  ENGINE_DESC="$RUST_BIN"
+  hook_cmd() { printf '"%s" %s' "$RUST_BIN" "$1"; }
+else
+  RUNTIME="$(pick_js_runtime)" || {
+    echo "ERROR: need 'bun' or 'node' on PATH (or a built Rust binary); found none." >&2
+    echo "  macOS:  brew install oven-sh/bun/bun   (or: brew install node)" >&2
+    echo "  Debian: curl -fsSL https://bun.sh/install | bash" >&2
+    echo "  Rust:   bash build-rust.sh" >&2
+    exit 1
+  }
+  # Refuse a runtime that cannot actually load the hooks, rather than discovering
+  # it later as silently dead hooks.
+  "$RUNTIME" -e "require('$ROOT/hooks/lib/rules.js')" >/dev/null 2>&1 || {
+    echo "ERROR: '$RUNTIME' cannot load the hook modules. Refusing to install." >&2
+    exit 1
+  }
+  HOOK_ENGINE="$(basename "$RUNTIME")"
+  ENGINE_DESC="$RUNTIME"
+  hook_cmd() { printf '"%s" "%s/hooks/%s.js"' "$RUNTIME" "$ROOT" "$1"; }
 
-# Refuse a runtime that cannot actually load the hooks, rather than discovering
-# it later as silently dead hooks.
-"$RUNTIME" -e "require('$ROOT/hooks/lib/rules.js')" >/dev/null 2>&1 || {
-  echo "ERROR: '$RUNTIME' cannot load the hook modules. Refusing to install." >&2
-  exit 1
-}
-
-if [ "$RUNTIME_NAME" = "node" ] && ! command -v bun >/dev/null; then
-  echo "NOTE: using node (~25ms per hook). Installing bun makes hooks ~6x faster:"
-  echo "        curl -fsSL https://bun.sh/install | bash"
-  echo "      Then re-run this installer."
-  echo
+  if [ "$HOOK_ENGINE" = "node" ] && ! command -v bun >/dev/null; then
+    echo "NOTE: using node (~25ms per hook). bun runs the same code in ~12ms:"
+    echo "        curl -fsSL https://bun.sh/install | bash"
+    echo "      Or build the Rust hooks (~3ms):  bash build-rust.sh"
+    echo "      Then re-run this installer."
+    echo
+  elif [ "$HOOK_ENGINE" = "bun" ] && command -v cargo >/dev/null && [ ! -x "$RUST_BIN" ]; then
+    echo "NOTE: using bun (~12ms per hook). The Rust hooks run in ~3ms:"
+    echo "        bash build-rust.sh && bash install.sh"
+    echo
+  fi
 fi
 
 if ! command -v ast-grep >/dev/null; then
@@ -130,9 +149,9 @@ done
 
 # -------------------------------------------------------------------- hooks
 TMP="$(mktemp)"
-LR="\"$RUNTIME\" \"$ROOT/hooks/lazy-rules.js\""
-LRP="\"$RUNTIME\" \"$ROOT/hooks/lazy-rules-post.js\""
-RD="\"$RUNTIME\" \"$ROOT/hooks/read-discipline.js\""
+LR="$(hook_cmd lazy-rules)"
+LRP="$(hook_cmd lazy-rules-post)"
+RD="$(hook_cmd read-discipline)"
 EDIT_TOOLS="Edit|Write|MultiEdit|NotebookEdit|Bash"
 
 jq --arg lr "$LR" --arg lrp "$LRP" --arg rd "$RD" \
@@ -162,7 +181,7 @@ fi
 cat "$TMP" > "$SETTINGS"
 rm -f "$TMP"
 echo "    hooks registered ($before pre-existing hooks preserved)"
-echo "    runtime: $RUNTIME"
+echo "    engine : $HOOK_ENGINE ($ENGINE_DESC)"
 
 # --------------------------------------------------------------------- done
 cat <<EOF
@@ -175,7 +194,7 @@ cat <<EOF
 
     Restart Claude Code (or open a new session) for hooks to load.
 
-    Verify:  $RUNTIME "$ROOT/test/run.js"
+    Verify:  node "$ROOT/test/run.js"
     Undo:    bash "$BK/undo.sh"           # dry run
              bash "$BK/undo.sh" --apply
 EOF
