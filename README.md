@@ -257,6 +257,39 @@ the harness internals. If you want those, use omp itself.
   only). There is no tool-*result* rewrite hook, which is why read discipline works
   by denying with an outline rather than by shrinking the result.
 
+## Credits
+
+This project exists because of [oh-my-pi (omp)](https://github.com/can1357/oh-my-pi)
+by **Can Bölük**, itself a fork of [Pi](https://github.com/badlogic/pi-mono) by
+**Mario Zechner**. Both are MIT licensed. The ideas here are theirs; the mistakes
+are mine.
+
+Worth reading directly — they are better written than this README:
+
+- [The Harness Problem](https://stencil.so/blog/the-harness-problem) — the edit-format
+  benchmark across 16 models, and the argument that harness design, not model
+  capability, is what most often fails
+- [snapcompact](https://stencil.so/blog/snapcompact) — compacting context by rendering
+  it to bitmap images and letting vision models read it back
+- [omp.sh/docs](https://omp.sh/docs) — the full harness
+
+**What is borrowed:** the lazy-rule concept (omp calls it TTSR, "time-traveling
+stream rules"), the structural-outline read, the `matcherDigest` idea of matching
+only the content a call introduces, and the `<system-interrupt>` envelope format —
+the last reproduced verbatim from omp's TTSR interrupt template.
+
+**What is not:** any source code. Everything here was written from scratch for a
+different runtime — these are Node scripts driving Claude Code hooks; omp is
+TypeScript and Rust, and the two harnesses share no execution model. omp does its
+work by controlling the provider request; this can only deny a tool call or rewrite
+its input.
+
+If you want the real thing rather than this partial port, [use omp](https://omp.sh).
+It is a better tool than what a hook layer can reach.
+
+Not affiliated with, sponsored by, or endorsed by the omp or Pi projects.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE), which also carries the upstream MIT notices as
+attribution.

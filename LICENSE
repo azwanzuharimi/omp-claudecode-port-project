@@ -2,6 +2,32 @@ MIT License
 
 Copyright (c) 2026 Azwan Zuharimi
 
+---
+
+This project is an independent reimplementation of ideas from oh-my-pi (omp),
+which is also MIT licensed:
+
+    https://github.com/can1357/oh-my-pi
+    Copyright (c) 2025 Mario Zechner
+    Copyright (c) 2025-2026 Can Bölük
+
+    ...itself a fork of Pi by Mario Zechner:
+    https://github.com/badlogic/pi-mono
+    Copyright (c) 2025 Mario Zechner
+
+No source code from either project is included here. All code in this
+repository was written from scratch against a different runtime (Node, for
+Claude Code hooks; omp is TypeScript and Rust). What is borrowed is design:
+the lazy-rule / TTSR concept, the structural-outline read, and terminology
+such as "matcherDigest". One format string -- the <system-interrupt> envelope
+used in rule violation messages -- is reproduced verbatim from omp's TTSR
+interrupt template. See the Credits section of README.md.
+
+The MIT notices above are reproduced as attribution. Not affiliated with,
+sponsored by, or endorsed by the oh-my-pi or Pi projects.
+
+---
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
