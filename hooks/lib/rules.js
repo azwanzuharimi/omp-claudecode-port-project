@@ -95,6 +95,10 @@ function loadRules(cwd) {
   for (const { dir } of RULE_DIRS(cwd)) {
     let entries;
     try { entries = fs.readdirSync(dir); } catch { continue; }
+    // Sort explicitly: readdir order is filesystem- and runtime-dependent (node
+    // and bun disagree), and evaluate() fires the FIRST matching rule. Without
+    // this, which rule wins a two-rule match would vary by interpreter.
+    entries.sort();
     for (const f of entries) {
       if (!f.endsWith('.md')) continue;
       let text;

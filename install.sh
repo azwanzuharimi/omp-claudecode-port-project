@@ -17,16 +17,48 @@ RULES_DIR="$CONFIG_DIR/rules"
 HOOK_MATCH="lazy-rules|read-discipline"
 
 # ------------------------------------------------------------ prerequisites
-missing=0
-for c in jq node; do
-  command -v "$c" >/dev/null || { echo "ERROR: '$c' is required but not installed." >&2; missing=1; }
-done
-[ "$missing" -eq 0 ] || {
-  echo >&2
-  echo "  macOS:  brew install jq node" >&2
-  echo "  Debian: sudo apt install jq nodejs" >&2
+command -v jq >/dev/null || {
+  echo "ERROR: 'jq' is required but not installed." >&2
+  echo "  macOS:  brew install jq" >&2
+  echo "  Debian: sudo apt install jq" >&2
   exit 1
 }
+
+# Resolve the JS runtime once, at install time, and bake its absolute path into
+# the hook commands. ~93% of a hook's cost is interpreter startup: node is ~25ms,
+# bun runs the identical CommonJS in ~4ms. Bun is preferred purely for that.
+pick_runtime() {
+  if [ -n "${OMP_PORT_RUNTIME:-}" ]; then
+    command -v "$OMP_PORT_RUNTIME" 2>/dev/null && return 0
+    echo "ERROR: OMP_PORT_RUNTIME='$OMP_PORT_RUNTIME' is not on PATH." >&2
+    exit 1
+  fi
+  command -v bun 2>/dev/null && return 0
+  command -v node 2>/dev/null && return 0
+  return 1
+}
+
+RUNTIME="$(pick_runtime)" || {
+  echo "ERROR: need either 'bun' or 'node' on PATH; found neither." >&2
+  echo "  macOS:  brew install oven-sh/bun/bun   (or: brew install node)" >&2
+  echo "  Debian: curl -fsSL https://bun.sh/install | bash" >&2
+  exit 1
+}
+RUNTIME_NAME="$(basename "$RUNTIME")"
+
+# Refuse a runtime that cannot actually load the hooks, rather than discovering
+# it later as silently dead hooks.
+"$RUNTIME" -e "require('$ROOT/hooks/lib/rules.js')" >/dev/null 2>&1 || {
+  echo "ERROR: '$RUNTIME' cannot load the hook modules. Refusing to install." >&2
+  exit 1
+}
+
+if [ "$RUNTIME_NAME" = "node" ] && ! command -v bun >/dev/null; then
+  echo "NOTE: using node (~25ms per hook). Installing bun makes hooks ~6x faster:"
+  echo "        curl -fsSL https://bun.sh/install | bash"
+  echo "      Then re-run this installer."
+  echo
+fi
 
 if ! command -v ast-grep >/dev/null; then
   echo "NOTE: ast-grep not found. The hooks work without it; only the 'codemod'"
@@ -98,9 +130,9 @@ done
 
 # -------------------------------------------------------------------- hooks
 TMP="$(mktemp)"
-LR="node \"$ROOT/hooks/lazy-rules.js\""
-LRP="node \"$ROOT/hooks/lazy-rules-post.js\""
-RD="node \"$ROOT/hooks/read-discipline.js\""
+LR="\"$RUNTIME\" \"$ROOT/hooks/lazy-rules.js\""
+LRP="\"$RUNTIME\" \"$ROOT/hooks/lazy-rules-post.js\""
+RD="\"$RUNTIME\" \"$ROOT/hooks/read-discipline.js\""
 EDIT_TOOLS="Edit|Write|MultiEdit|NotebookEdit|Bash"
 
 jq --arg lr "$LR" --arg lrp "$LRP" --arg rd "$RD" \
@@ -130,6 +162,7 @@ fi
 cat "$TMP" > "$SETTINGS"
 rm -f "$TMP"
 echo "    hooks registered ($before pre-existing hooks preserved)"
+echo "    runtime: $RUNTIME"
 
 # --------------------------------------------------------------------- done
 cat <<EOF
@@ -142,7 +175,7 @@ cat <<EOF
 
     Restart Claude Code (or open a new session) for hooks to load.
 
-    Verify:  node "$ROOT/test/run.js"
+    Verify:  $RUNTIME "$ROOT/test/run.js"
     Undo:    bash "$BK/undo.sh"           # dry run
              bash "$BK/undo.sh" --apply
 EOF

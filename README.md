@@ -36,8 +36,9 @@ The installer snapshots your config with sha256 before touching anything, refuse
 write if it would disturb another tool's hooks, and leaves a verified one-command
 undo. It coexists with existing hook chains rather than replacing them.
 
-**Fast and quiet.** ~25 ms per hook, against a 150 ms budget enforced by the tests.
-Every hook silent-fails and exits 0 — a crashed hook can never block a tool call.
+**Fast and quiet.** 13.5 ms per hook on bun (28.4 ms on node), against a 150 ms
+budget enforced by the tests. Every hook silent-fails and exits 0 — a crashed hook
+can never block a tool call.
 
 ---
 
@@ -45,17 +46,38 @@ Every hook silent-fails and exits 0 — a crashed hook can never block a tool ca
 
 | | Needed for | Install |
 |---|---|---|
-| `node` | the hooks | `brew install node` / `apt install nodejs` |
+| `bun` **or** `node` | the hooks — bun preferred, [2× faster](#performance) | `curl -fsSL https://bun.sh/install \| bash` |
 | `jq` | the installer | `brew install jq` / `apt install jq` |
 | `ast-grep` | **optional** — only the `codemod` skill | `brew install ast-grep` |
-| `uv` | **optional** — only the benchmark | [astral.sh/uv](https://docs.astral.sh/uv/) |
+| `uv` | **optional** — only the token benchmark | [astral.sh/uv](https://docs.astral.sh/uv/) |
 
 Claude Code with hook support. macOS or Linux.
 
 ```bash
-brew install jq node ast-grep                        # macOS
-sudo apt install jq nodejs && brew install ast-grep  # Debian/Ubuntu
+# macOS
+brew install jq ast-grep && curl -fsSL https://bun.sh/install | bash
+
+# Debian/Ubuntu
+sudo apt install jq && curl -fsSL https://bun.sh/install | bash
 ```
+
+Either runtime works. `install.sh` picks bun if it is on PATH, otherwise node, and
+bakes the resolved absolute path into the hook commands. Override with
+`OMP_PORT_RUNTIME=/path/to/runtime bash install.sh`. If you install bun later,
+re-run `install.sh` to switch.
+
+### Performance
+
+93% of a hook's cost is interpreter startup, not our code — the logic itself is
+~1.8 ms. So the runtime choice is the only lever that matters.
+
+| Runtime | Per hook call | Busy session (387 calls) |
+|---|---|---|
+| node | 28.4 ms | 10.6 s |
+| **bun** | **13.5 ms** | **5.3 s** |
+
+Measured on macOS arm64, 30 runs. A Rust rewrite would reach ~3–4 ms; why that is not
+worth doing is written up in [docs/rust-port.md](docs/rust-port.md).
 
 ## Install
 
@@ -100,13 +122,15 @@ leaves `ast-grep` installed — that is a standalone tool, not ours to remove.
 ## Test
 
 ```bash
-node test/run.js    # 38 tests, zero dependencies
+node test/run.js    # 44 tests, zero dependencies
+bun  test/run.js    # same suite under the other runtime
 ```
 
 Runs against an isolated `CLAUDE_CONFIG_DIR`, so it never reads the rules you
 actually have installed. Covers rule matching and scoping, fire-once and `after-gap`,
 the hook JSON contracts, outline quality and the coverage gate, false-positive checks
-on every shipped rule, and the latency budget.
+on every shipped rule, deterministic rule ordering, byte-identical output across
+node and bun, and the latency budget.
 
 ---
 
@@ -126,8 +150,9 @@ rules/                       three example rules, copied to ~/.claude/rules on i
 skills/codemod/              ast-grep for repeated mechanical edits
 skills/bounded-output/       keeping large command output out of context
 bench/read_savings.py        deterministic token measurement, no API calls
+docs/rust-port.md            why the hooks are not Rust (with measurements)
 lib/undo.sh                  generic undo, copied into every backup
-test/run.js                  38 tests
+test/run.js                  44 tests
 install.sh / uninstall.sh
 ```
 

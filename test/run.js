@@ -25,12 +25,23 @@ function t(name, fn) {
   catch (e) { fail++; console.log(`  FAIL ${name}\n       ${e.message}`); }
 }
 
-function runHook(script, payload, env = {}) {
-  const out = execFileSync('node', [path.join(ROOT, 'hooks', script)], {
+// process.execPath, not a hardcoded 'node', so the suite exercises whichever
+// runtime is running it. Run it twice - `node test/run.js` and `bun test/run.js` -
+// to cover both.
+const RUNTIME = process.execPath;
+const RUNTIME_NAME = path.basename(RUNTIME);
+
+function runHookWith(runtime, script, payload, env = {}) {
+  const out = execFileSync(runtime, [path.join(ROOT, 'hooks', script)], {
     input: JSON.stringify(payload),
     env: { ...process.env, ...env },
     encoding: 'utf8',
   });
+  return out;
+}
+
+function runHook(script, payload, env = {}) {
+  const out = runHookWith(RUNTIME, script, payload, env);
   return out.trim() ? JSON.parse(out) : null;
 }
 
@@ -115,9 +126,18 @@ t('fire-once: an already-fired rule is disarmed', () => {
 });
 
 t('after-gap re-arms only after the gap elapses', () => {
-  const r = { ...loaded[0], repeat: 'after-gap 3' };
+  // By name, not by index: readdir order is runtime-dependent.
+  const base = loaded.find((x) => x.name === 'no-pip');
+  const r = { ...base, repeat: 'after-gap 3' };
   assert.strictEqual(rules.isArmed(r, { calls: 4, fired: { 'no-pip': 2 } }), false);
   assert.strictEqual(rules.isArmed(r, { calls: 5, fired: { 'no-pip': 2 } }), true);
+});
+
+t('rule order is deterministic regardless of readdir order', () => {
+  // evaluate() fires the first match, so load order is user-visible behavior.
+  const names = loaded.map((r) => r.name);
+  assert.deepStrictEqual(names, [...names].sort(),
+    `rules must load in sorted order, got: ${names.join(', ')}`);
 });
 
 // ---------------------------------------------------------------- hook I/O
@@ -167,7 +187,7 @@ t('pending queue drains - a second PostToolUse emits nothing', () => {
 
 t('empty stdin and malformed JSON exit clean with no output', () => {
   for (const body of ['', '{not json']) {
-    const out = execFileSync('node', [path.join(ROOT, 'hooks/lazy-rules.js')], { input: body, encoding: 'utf8' });
+    const out = execFileSync(RUNTIME, [path.join(ROOT, 'hooks/lazy-rules.js')], { input: body, encoding: 'utf8' });
     assert.strictEqual(out.trim(), '');
   }
 });
@@ -386,6 +406,60 @@ t('KNOWN LIMITATION: a rule pattern inside a search string still fires', () => {
   assert.strictEqual(named('Bash', { command: 'grep -r "pip install" docs/' }), 'no-bare-pip');
 });
 
+// ---------------------------------------------------------- cross-runtime
+console.log(`\ncross-runtime equivalence (running under ${RUNTIME_NAME})`);
+
+function whichRuntimes() {
+  const found = [];
+  for (const name of ['node', 'bun']) {
+    try {
+      const p = execFileSync('command', ['-v', name], { encoding: 'utf8', shell: true }).trim();
+      if (p) found.push([name, p]);
+    } catch { /* not installed */ }
+  }
+  return found;
+}
+
+const runtimes = whichRuntimes();
+
+t(`both runtimes present (found: ${runtimes.map((r) => r[0]).join(', ') || 'none'})`, () => {
+  assert.ok(runtimes.length >= 1, 'need at least one JS runtime');
+  if (runtimes.length < 2) {
+    console.log('       (only one runtime installed - equivalence check skipped, not failed)');
+  }
+});
+
+if (runtimes.length === 2) {
+  // Every hook, every branch that produces output, must be byte-identical across
+  // runtimes. This is the entire justification for swapping node out for bun.
+  const cases = [
+    ['lazy-rules.js', 'deny branch',
+      { cwd: path.join(tmp, 'proj'), tool_name: 'Bash', tool_input: { command: 'pip install requests' } }],
+    ['lazy-rules.js', 'no-match branch',
+      { cwd: path.join(tmp, 'proj'), tool_name: 'Bash', tool_input: { command: 'ls -la' } }],
+    ['read-discipline.js', 'outline branch',
+      { tool_name: 'Read', tool_input: { file_path: bigFile } }],
+    ['read-discipline.js', 'under-threshold branch',
+      { tool_name: 'Read', tool_input: { file_path: smallFile } }],
+  ];
+
+  for (const [script, label, basePayload] of cases) {
+    t(`${script} ${label}: node and bun agree byte-for-byte`, () => {
+      const outputs = runtimes.map(([name, bin]) => {
+        // Fresh session id per runtime so fire-once/deny-once state cannot make
+        // the second runtime look different for the wrong reason.
+        const sid = `xrt-${name}-${label.replace(/\W+/g, '')}-${process.pid}`;
+        const out = runHookWith(bin, script, { ...basePayload, session_id: sid });
+        try { fs.unlinkSync(path.join(ISO, 'state', 'omp-claudecode-port-project', sid + '.json')); } catch {}
+        return out;
+      });
+      assert.strictEqual(outputs[0], outputs[1],
+        `${runtimes[0][0]} produced ${JSON.stringify(outputs[0]).slice(0, 120)}\n` +
+        `       ${runtimes[1][0]} produced ${JSON.stringify(outputs[1]).slice(0, 120)}`);
+    });
+  }
+}
+
 // -------------------------------------------------------------- config dir
 console.log('\nconfig resolution');
 
@@ -394,7 +468,7 @@ t('CLAUDE_CONFIG_DIR is honored for rule discovery', () => {
   fs.mkdirSync(path.join(alt, 'rules'), { recursive: true });
   fs.writeFileSync(path.join(alt, 'rules', 'alt.md'),
     '---\ndescription: alt\ncondition: "ZZTOP"\nscope: "tool:Bash"\n---\nalt rule body\n');
-  const out = execFileSync('node', ['-e',
+  const out = execFileSync(RUNTIME, ['-e',
     `const r=require(${JSON.stringify(path.join(ROOT, 'hooks/lib/rules'))});` +
     `console.log(r.loadRules('/nonexistent').map(x=>x.name).join(','))`,
   ], { env: { ...process.env, CLAUDE_CONFIG_DIR: alt }, encoding: 'utf8' }).trim();
@@ -410,7 +484,7 @@ t('project rule shadows a user rule of the same filename', () => {
     '---\ndescription: user\ncondition: "QQQ"\nscope: "tool:Bash"\n---\nUSER VERSION\n');
   fs.writeFileSync(path.join(proj, '.claude', 'rules', 'dup.md'),
     '---\ndescription: project\ncondition: "QQQ"\nscope: "tool:Bash"\n---\nPROJECT VERSION\n');
-  const out = execFileSync('node', ['-e',
+  const out = execFileSync(RUNTIME, ['-e',
     `const r=require(${JSON.stringify(path.join(ROOT, 'hooks/lib/rules'))});` +
     `const rs=r.loadRules(${JSON.stringify(proj)});` +
     `console.log(rs.length + '|' + rs[0].body)`,
