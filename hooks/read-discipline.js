@@ -13,7 +13,7 @@ const fs = require('fs');
 const outliner = require('./lib/outline');
 const store = require('./lib/state');
 
-const LINE_THRESHOLD = Number(process.env.OMP_LITE_READ_THRESHOLD || 400);
+const LINE_THRESHOLD = Number(process.env.OMP_PORT_READ_THRESHOLD || 400);
 const MAX_BYTES = 4 * 1024 * 1024;
 
 function main() {

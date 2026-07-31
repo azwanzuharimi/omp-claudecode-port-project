@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, '..');
 // Isolate from the real ~/.claude BEFORE requiring the libs - they resolve
 // CLAUDE_CONFIG_DIR at module load. Without this the suite picks up whatever
 // rules the user actually has installed and every assertion becomes a lie.
-const ISO = fs.mkdtempSync(path.join(os.tmpdir(), 'omp-lite-cfg-'));
+const ISO = fs.mkdtempSync(path.join(os.tmpdir(), 'omp-claudecode-port-project-cfg-'));
 fs.mkdirSync(path.join(ISO, 'rules'), { recursive: true });
 process.env.CLAUDE_CONFIG_DIR = ISO;
 
@@ -35,7 +35,7 @@ function runHook(script, payload, env = {}) {
 }
 
 // ---------------------------------------------------------------- fixtures
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'omp-lite-test-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'omp-claudecode-port-project-test-'));
 const ruleDir = path.join(tmp, 'proj', '.claude', 'rules');
 fs.mkdirSync(ruleDir, { recursive: true });
 fs.writeFileSync(path.join(ruleDir, 'no-pip.md'), `---
@@ -124,7 +124,7 @@ t('after-gap re-arms only after the gap elapses', () => {
 console.log('\nlazy-rules hook');
 
 const SID = 'test-' + process.pid;
-const stateFile = path.join(ISO, 'state', 'omp-lite', SID + '.json');
+const stateFile = path.join(ISO, 'state', 'omp-claudecode-port-project', SID + '.json');
 function clearState() { try { fs.unlinkSync(stateFile); } catch {} }
 clearState();
 

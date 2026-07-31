@@ -1,4 +1,4 @@
-# omp-lite
+# omp-claudecode-port-project
 
 Context-efficiency tricks ported from [oh-my-pi](https://omp.sh) into Claude Code,
 using only hooks and skills — no MCP tools, no patched binaries.
@@ -81,7 +81,7 @@ Fires only when **all** of these hold:
 
 - recognized source extension
 - no `offset`/`limit` already set
-- over 400 lines (`OMP_LITE_READ_THRESHOLD` to change)
+- over 400 lines (`OMP_PORT_READ_THRESHOLD` to change)
 - the outline actually represents the file — at least `max(4, lines/80)` declarations
 - this path has not already been denied in this session
 
@@ -118,24 +118,54 @@ usually follows. It also only applies to the few files that clear the 400-line g
 **The lazy-rules saving is not measured.** Its value is avoided bad-edit-then-fix
 cycles, which needs paired end-to-end runs to quantify. Treat it as unproven.
 
-## Install
+## Install (including on a second machine)
 
 ```bash
-bash install.sh     # registers hooks in settings.json, copies example rules
+git clone https://github.com/azwanzuharimi/omp-claudecode-port-project.git
+cd omp-claudecode-port-project
+bash install.sh
 ```
 
-Idempotent. Re-running replaces only omp-lite's own hook entries, refuses to write
-if the generated settings.json is invalid or if any pre-existing hook would be lost,
-and never overwrites a rule file you already have. Requires `jq`, `node`, and
-`ast-grep` (for the codemod skill only).
+Then restart Claude Code.
+
+**Requirements:** `jq` and `node` (hard). `ast-grep` is optional — only the
+`codemod` skill uses it; the hooks work without it and the installer just prints a
+note.
+
+```bash
+brew install jq node ast-grep          # macOS
+sudo apt install jq nodejs && brew install ast-grep   # Debian/Ubuntu
+```
+
+The installer is self-contained and safe to run on a machine that has never seen
+this repo. Before touching anything it writes a sha256-verified snapshot of
+`settings.json`, `settings.local.json`, `CLAUDE.md`, the two plugin JSONs and your
+existing `rules/` to `~/.claude/backups/omp-claudecode-port-project-<timestamp>/`,
+and drops a matching `undo.sh` beside it.
+
+It also:
+
+- refuses to run if `settings.json` is not valid JSON
+- counts every pre-existing hook across every event before and after, and **aborts
+  without writing** if the number would change — your other hooks cannot be clobbered
+- never overwrites a rule file you already edited
+- is idempotent: re-running replaces only this plugin's own hook entries
+
+Hook paths are absolute and computed at install time, so the repo can live anywhere.
+`CLAUDE_CONFIG_DIR` is honored if your config is not at `~/.claude`.
+
+Nothing here is machine-specific — no absolute paths, secrets, or host state are
+committed. The same clone works on any macOS or Linux box.
 
 ## Uninstall
 
 ```bash
-ls -d ~/.claude/backups/omp-lite-*/ | sort | tail -1   # newest snapshot
-bash <that>/undo.sh            # dry run
-bash <that>/undo.sh --apply    # restore settings.json, remove installed files
+bash uninstall.sh            # dry run against the newest backup
+bash uninstall.sh --apply
 ```
+
+Restores `settings.json` from the snapshot and removes what the install created.
+It deliberately leaves `ast-grep` installed.
 
 ## Test
 

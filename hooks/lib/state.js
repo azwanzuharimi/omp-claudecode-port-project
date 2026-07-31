@@ -5,7 +5,7 @@ const path = require('path');
 const os = require('os');
 
 const CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const STATE_DIR = path.join(CONFIG_DIR, 'state', 'omp-lite');
+const STATE_DIR = path.join(CONFIG_DIR, 'state', 'omp-claudecode-port-project');
 
 function sanitize(id) {
   return String(id || 'nosession').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128);

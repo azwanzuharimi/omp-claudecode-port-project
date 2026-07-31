@@ -1,5 +1,5 @@
 {
-  "name": "omp-lite",
+  "name": "omp-claudecode-port-project",
   "version": "0.1.0",
   "description": "Context-efficiency tricks ported from oh-my-pi: rules that stay dormant until you go off-script, and reads that return signatures instead of whole files.",
   "hooks": {
